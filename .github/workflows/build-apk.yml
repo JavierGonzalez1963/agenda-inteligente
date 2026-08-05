@@ -1,0 +1,56 @@
+name: Compilar APK de Agenda Inteligente
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar mis archivos del repositorio
+        uses: actions/checkout@v4
+        with:
+          path: fuente
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      - name: Crear el proyecto base de Flutter
+        run: flutter create --org com.agendainteligente --project-name agenda_inteligente app
+
+      - name: Copiar pubspec.yaml y main.dart dentro del proyecto
+        run: |
+          cp fuente/pubspec.yaml app/pubspec.yaml
+          cp fuente/lib/main.dart app/lib/main.dart
+
+      - name: Agregar permisos al AndroidManifest.xml
+        run: python3 fuente/scripts/merge_manifest.py app/android/app/src/main/AndroidManifest.xml
+
+      - name: Activar core library desugaring (lo requieren device_calendar y flutter_local_notifications)
+        run: python3 fuente/scripts/merge_build_gradle.py app/android/app/build.gradle
+
+      - name: Obtener dependencias
+        working-directory: app
+        run: flutter pub get
+
+      - name: Compilar APK (release)
+        working-directory: app
+        run: flutter build apk --release
+
+      - name: Subir el APK para descargar
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenda-inteligente-apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
