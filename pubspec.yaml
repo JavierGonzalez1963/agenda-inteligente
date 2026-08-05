@@ -1,0 +1,42 @@
+name: agenda_inteligente
+description: "Agenda con voz, alarma diaria y almacenamiento local."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # Voz -> texto (reconocimiento nativo en Android)
+  speech_to_text: ^7.0.0
+
+  # Permisos en tiempo de ejecución (micrófono, notificaciones, alarma exacta)
+  permission_handler: ^11.3.1
+
+  # Alarma diaria exacta en segundo plano, aunque la app esté cerrada
+  android_alarm_manager_plus: ^4.0.4
+
+  # Notificación local al sonar la alarma
+  flutter_local_notifications: ^17.2.2
+
+  # Guardar citas y configuración de la alarma en el teléfono
+  shared_preferences: ^2.3.2
+
+  # Formato de fechas en español
+  intl: ^0.19.0
+
+  # Leer eventos del Calendario nativo de Android (incluye los que
+  # ya sincronizaste desde tu cuenta de Google en el teléfono)
+  device_calendar: ^4.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
