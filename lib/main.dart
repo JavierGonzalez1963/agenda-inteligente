@@ -648,7 +648,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final calendarsResult = await _deviceCalendarPlugin.retrieveCalendars();
     // Filtramos los que no traen id: sin id no se pueden consultar sus eventos.
-    final calendars = (calendarsResult.data ?? []).where((c) => c.id != null).toList();
+    final calendars = (calendarsResult.data ?? <dc.Calendar>[]).where((c) => c.id != null).toList();
     if (calendars.isEmpty) {
       setState(() {
         _importingCalendar = false;
@@ -673,7 +673,7 @@ class _HomeScreenState extends State<HomeScreen> {
         cal.id!, // ya filtramos arriba los calendarios sin id
         dc.RetrieveEventsParams(startDate: start, endDate: end),
       );
-      final events = eventsResult.data ?? [];
+      final events = eventsResult.data ?? <dc.Event>[];
       for (final ev in events) {
         if (ev.start == null || ev.eventId == null) continue;
         final localStart = ev.start!.toLocal();
