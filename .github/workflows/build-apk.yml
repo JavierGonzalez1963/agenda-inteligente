@@ -37,7 +37,13 @@ jobs:
         run: python3 fuente/scripts/merge_manifest.py app/android/app/src/main/AndroidManifest.xml
 
       - name: Activar core library desugaring (lo requieren device_calendar y flutter_local_notifications)
-        run: python3 fuente/scripts/merge_build_gradle.py app/android/app/build.gradle
+        working-directory: app
+        run: |
+          if [ -f android/app/build.gradle.kts ]; then
+            python3 ../fuente/scripts/merge_build_gradle.py android/app/build.gradle.kts
+          else
+            python3 ../fuente/scripts/merge_build_gradle.py android/app/build.gradle
+          fi
 
       - name: Obtener dependencias
         working-directory: app
