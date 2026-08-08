@@ -639,20 +639,34 @@ class _HomeScreenState extends State<HomeScreen> {
       permission = await _deviceCalendarPlugin.requestPermissions();
     }
     if (permission.data != true) {
+      final detail = permission.hasErrors
+          ? permission.errors.map((e) => e.toString()).join(' | ')
+          : 'el sistema no concedió el permiso';
       setState(() {
         _importingCalendar = false;
-        _importMessage = 'No se concedió permiso de calendario. Actívalo en Ajustes del teléfono.';
+        _importMessage = 'No se pudo obtener permiso de calendario ($detail).';
       });
       return;
     }
 
     final calendarsResult = await _deviceCalendarPlugin.retrieveCalendars();
+    if (calendarsResult.hasErrors) {
+      final detail = calendarsResult.errors.map((e) => e.toString()).join(' | ');
+      setState(() {
+        _importingCalendar = false;
+        _importMessage = 'Error del sistema al leer calendarios: $detail';
+      });
+      return;
+    }
+    final allCalendars = calendarsResult.data ?? <dc.Calendar>[];
     // Filtramos los que no traen id: sin id no se pueden consultar sus eventos.
-    final calendars = (calendarsResult.data ?? <dc.Calendar>[]).where((c) => c.id != null).toList();
+    final calendars = allCalendars.where((c) => c.id != null).toList();
     if (calendars.isEmpty) {
       setState(() {
         _importingCalendar = false;
-        _importMessage = 'No se encontraron calendarios en el teléfono. Agrega tu cuenta de Google en Ajustes > Cuentas primero.';
+        _importMessage = allCalendars.isEmpty
+            ? 'El sistema no devolvió ningún calendario, aunque el permiso esté concedido. Prueba: Ajustes > Apps > Agenda Inteligente > Permisos > Calendario > desactivar y volver a activar, luego intenta de nuevo.'
+            : 'Se encontraron ${allCalendars.length} calendario(s), pero ninguno trae un identificador válido — esto parece un problema del propio sistema Android en este teléfono.';
       });
       return;
     }
@@ -763,13 +777,21 @@ class _HomeScreenState extends State<HomeScreen> {
     await showModalBottomSheet(
       context: context,
       backgroundColor: surface,
+      isScrollControlled: true, // permite que el panel crezca y se pueda desplazar
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) => Padding(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
-          child: Column(
+          // deja espacio para el teclado si llega a abrirse, y limita la
+          // altura máxima para que el contenido pueda desplazarse en vez
+          // de quedar cortado por debajo de la pantalla
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.85),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+              child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -852,6 +874,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ],
+          ),
+            ),
           ),
         ),
       ),
