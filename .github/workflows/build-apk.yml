@@ -45,6 +45,10 @@ jobs:
             python3 ../fuente/scripts/merge_build_gradle.py android/app/build.gradle
           fi
 
+      - name: Agregar reglas de ProGuard (evita que R8 borre los datos de Google Calendar en release)
+        working-directory: app
+        run: python3 ../fuente/scripts/add_proguard_rules.py android/app
+
       - name: Obtener dependencias
         working-directory: app
         run: flutter pub get
