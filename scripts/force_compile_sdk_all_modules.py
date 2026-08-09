@@ -10,6 +10,13 @@ módulos del proyecto (el tuyo y los de cada plugin), agregando un
 bloque "subprojects" en el build.gradle raíz de android/ (un nivel
 arriba del de app/).
 
+Usamos plugins.withId(...) en vez de afterEvaluate: el propio
+build.gradle.kts que genera Flutter ya fuerza una evaluación
+temprana de ":app" (con evaluationDependsOn), lo que hace fallar a
+afterEvaluate con "project is already evaluated". plugins.withId
+se dispara en el momento en que el plugin de Android se aplica,
+sin depender de ese orden de evaluación.
+
 Uso: python3 force_compile_sdk_all_modules.py <ruta_carpeta_android>
 """
 import sys
@@ -23,11 +30,14 @@ GROOVY_BLOCK = f"""
 // (incluidos los de los plugins) para evitar choques de versión
 // entre distintos plugins de Flutter.
 subprojects {{
-    afterEvaluate {{ proj ->
-        if (proj.plugins.hasPlugin("com.android.library") || proj.plugins.hasPlugin("com.android.application")) {{
-            proj.android {{
-                compileSdkVersion {COMPILE_SDK}
-            }}
+    plugins.withId("com.android.library") {{
+        android {{
+            compileSdkVersion {COMPILE_SDK}
+        }}
+    }}
+    plugins.withId("com.android.application") {{
+        android {{
+            compileSdkVersion {COMPILE_SDK}
         }}
     }}
 }}
@@ -38,11 +48,14 @@ KOTLIN_BLOCK = f"""
 // (incluidos los de los plugins) para evitar choques de versión
 // entre distintos plugins de Flutter.
 subprojects {{
-    afterEvaluate {{
-        if (project.plugins.hasPlugin("com.android.application") || project.plugins.hasPlugin("com.android.library")) {{
-            project.extensions.configure<com.android.build.gradle.BaseExtension> {{
-                compileSdkVersion({COMPILE_SDK})
-            }}
+    plugins.withId("com.android.library") {{
+        extensions.configure<com.android.build.gradle.LibraryExtension> {{
+            compileSdk = {COMPILE_SDK}
+        }}
+    }}
+    plugins.withId("com.android.application") {{
+        extensions.configure<com.android.build.gradle.BaseExtension> {{
+            compileSdkVersion({COMPILE_SDK})
         }}
     }}
 }}
@@ -65,13 +78,17 @@ def main():
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    if MARKER not in content:
-        content += "\n" + block
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-        print(f"Bloque de compileSdk global agregado a: {path}")
-    else:
-        print(f"Ya estaba agregado en: {path}")
+    # Si ya existe una versión anterior (con afterEvaluate) de este bloque,
+    # la quitamos para no dejar dos versiones conflictivas.
+    if MARKER in content:
+        start = content.find(f"\n// {MARKER}")
+        if start != -1:
+            content = content[:start].rstrip() + "\n"
+
+    content += "\n" + block
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"Bloque de compileSdk global (plugins.withId) agregado a: {path}")
 
 
 if __name__ == "__main__":
