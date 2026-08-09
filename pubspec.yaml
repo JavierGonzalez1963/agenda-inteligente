@@ -29,8 +29,13 @@ dependencies:
   # Formato de fechas en español
   intl: ^0.19.0
 
-  # Elegir el archivo .ics exportado desde Google Calendar para importarlo
-  file_picker: ^8.1.2
+  # Elegir el archivo .ics exportado desde Google Calendar para importarlo.
+  # Fijado a una versión anterior a propósito: las versiones más nuevas
+  # arrastran una dependencia (flutter_plugin_android_lifecycle) que exige
+  # compilar contra Android API 36, algo demasiado reciente y que causaba
+  # errores de compilación difíciles de parchar. La 6.x es una versión
+  # muy estable y usada durante mucho tiempo, sin ese requisito.
+  file_picker: ^6.1.1
 
 dev_dependencies:
   flutter_test:
