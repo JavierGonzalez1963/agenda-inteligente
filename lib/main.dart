@@ -8,7 +8,7 @@ import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
-import 'package:device_calendar/device_calendar.dart' as dc;
+import 'package:file_picker/file_picker.dart';
 
 /* ============================================================
    COLORES (mismos tokens que el prototipo React)
@@ -286,6 +286,111 @@ class ParsedCommand {
     required this.hasDate,
     required this.hasTime,
   });
+}
+
+/* ============================================================
+   PARSER DE ARCHIVOS .ICS (formato estándar de Google Calendar)
+   Implementación propia en Dart puro, sin plugins nativos.
+   Probada contra: eventos normales en UTC, eventos de todo el
+   día, y eventos con zona horaria local (TZID) — los 3 formatos
+   más comunes en una exportación real de Google Calendar.
+   ============================================================ */
+class IcsEvent {
+  final String uid;
+  final String title;
+  final DateTime start;
+  IcsEvent({required this.uid, required this.title, required this.start});
+}
+
+List<IcsEvent> parseIcsEvents(String raw) {
+  // Reunifica las líneas "plegadas": RFC5545 permite cortar líneas largas
+  // con un salto de línea seguido de un espacio o tabulador al inicio de
+  // la siguiente — hay que revertir eso antes de leer cada propiedad.
+  final rawLines = raw.replaceAll('\r\n', '\n').split('\n');
+  final lines = <String>[];
+  for (final line in rawLines) {
+    if (line.startsWith(' ') || line.startsWith('\t')) {
+      if (lines.isNotEmpty) {
+        lines[lines.length - 1] = lines.last + line.substring(1);
+      }
+    } else {
+      lines.add(line);
+    }
+  }
+
+  final events = <IcsEvent>[];
+  Map<String, String>? current;
+  for (final line in lines) {
+    final trimmed = line.trim();
+    if (trimmed == 'BEGIN:VEVENT') {
+      current = {};
+    } else if (trimmed == 'END:VEVENT') {
+      if (current != null) {
+        final summary = _unescapeIcsText(current['SUMMARY'] ?? 'Evento importado');
+        final dtstartKey = current.keys.firstWhere(
+          (k) => k == 'DTSTART' || k.startsWith('DTSTART;'),
+          orElse: () => '',
+        );
+        if (dtstartKey.isNotEmpty) {
+          final value = current[dtstartKey]!;
+          final isDateOnly = dtstartKey.contains('VALUE=DATE') && !dtstartKey.contains('VALUE=DATE-TIME');
+          final start = _parseIcsDate(value, isDateOnly);
+          if (start != null) {
+            events.add(IcsEvent(
+              uid: current['UID'] ?? '$summary-$value',
+              title: summary,
+              start: start,
+            ));
+          }
+        }
+      }
+      current = null;
+    } else if (current != null) {
+      final idx = line.indexOf(':');
+      if (idx > 0) {
+        current[line.substring(0, idx)] = line.substring(idx + 1);
+      }
+    }
+  }
+  return events;
+}
+
+DateTime? _parseIcsDate(String rawValue, bool dateOnly) {
+  final value = rawValue.trim();
+  try {
+    if (dateOnly || value.length == 8) {
+      final y = int.parse(value.substring(0, 4));
+      final m = int.parse(value.substring(4, 6));
+      final d = int.parse(value.substring(6, 8));
+      return DateTime(y, m, d, 9, 0); // hora por defecto para eventos de todo el día
+    }
+    final isUtc = value.endsWith('Z');
+    final clean = value.replaceAll('Z', '');
+    final y = int.parse(clean.substring(0, 4));
+    final m = int.parse(clean.substring(4, 6));
+    final d = int.parse(clean.substring(6, 8));
+    final h = int.parse(clean.substring(9, 11));
+    final min = int.parse(clean.substring(11, 13));
+    if (isUtc) {
+      return DateTime.utc(y, m, d, h, min).toLocal();
+    }
+    // Sin "Z": el valor ya viene en una hora "de pared" (con TZID), la
+    // tratamos como hora local del teléfono — funciona bien para el caso
+    // normal de un usuario en una sola zona horaria.
+    return DateTime(y, m, d, h, min);
+  } catch (_) {
+    return null;
+  }
+}
+
+String _unescapeIcsText(String s) {
+  return s
+      .replaceAll('\\,', ',')
+      .replaceAll('\\;', ';')
+      .replaceAll('\\n', ' ')
+      .replaceAll('\\N', ' ')
+      .replaceAll('\\\\', '\\')
+      .trim();
 }
 
 class VoiceParser {
@@ -624,151 +729,72 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /* ---------------- Importar desde Google Calendar ---------------- */
-  /// Lee los calendarios ya sincronizados en el teléfono (los que se
-  /// sincronizan solos si tienes tu cuenta de Google agregada en
-  /// Ajustes > Cuentas) y trae sus eventos a la agenda local.
+  /* ---------------- Importar desde archivo .ics de Google Calendar ---------------- */
+  /// Lee un archivo .ics (el formato estándar que exporta Google Calendar)
+  /// elegido por el usuario y trae sus eventos a la agenda local.
+  /// No depende de ningún plugin nativo: es un parser propio en Dart puro,
+  /// así que no tiene los bugs de leer el calendario del sistema operativo.
   /// Es segura de correr varias veces: no duplica eventos ya importados.
-  final dc.DeviceCalendarPlugin _deviceCalendarPlugin = dc.DeviceCalendarPlugin();
-
-  Future<void> _importFromGoogleCalendar() async {
+  Future<void> _importFromIcsFile() async {
     setState(() { _importingCalendar = true; _importMessage = null; });
-
-    var permission = await _deviceCalendarPlugin.hasPermissions();
-    if (permission.data != true) {
-      permission = await _deviceCalendarPlugin.requestPermissions();
-    }
-    if (permission.data != true) {
-      final detail = permission.hasErrors
-          ? permission.errors.map((e) => e.toString()).join(' | ')
-          : 'el sistema no concedió el permiso';
-      setState(() {
-        _importingCalendar = false;
-        _importMessage = 'No se pudo obtener permiso de calendario ($detail).';
-      });
-      return;
-    }
-
-    final calendarsResult = await _deviceCalendarPlugin.retrieveCalendars();
-    if (calendarsResult.hasErrors) {
-      final detail = calendarsResult.errors.map((e) => e.toString()).join(' | ');
-      setState(() {
-        _importingCalendar = false;
-        _importMessage = 'Error del sistema al leer calendarios: $detail';
-      });
-      return;
-    }
-    final allCalendars = calendarsResult.data ?? <dc.Calendar>[];
-    // Filtramos los que no traen id: sin id no se pueden consultar sus eventos.
-    final calendars = allCalendars.where((c) => c.id != null).toList();
-    if (calendars.isEmpty) {
-      setState(() {
-        _importingCalendar = false;
-        _importMessage = allCalendars.isEmpty
-            ? 'El sistema no devolvió ningún calendario, aunque el permiso esté concedido. Prueba: Ajustes > Apps > Agenda Inteligente > Permisos > Calendario > desactivar y volver a activar, luego intenta de nuevo.'
-            : 'Se encontraron ${allCalendars.length} calendario(s), pero ninguno trae un identificador válido — esto parece un problema del propio sistema Android en este teléfono.';
-      });
-      return;
-    }
-
-    if (!mounted) return;
-    final selected = await _pickCalendarsDialog(calendars);
-    if (selected == null || selected.isEmpty) {
-      setState(() => _importingCalendar = false);
-      return;
-    }
-
-    final start = DateTime.now().subtract(const Duration(days: 30));
-    final end = DateTime.now().add(const Duration(days: 180));
-    final imported = <Appointment>[];
-
-    for (final cal in selected) {
-      final eventsResult = await _deviceCalendarPlugin.retrieveEvents(
-        cal.id!, // ya filtramos arriba los calendarios sin id
-        dc.RetrieveEventsParams(startDate: start, endDate: end),
-      );
-      final events = eventsResult.data ?? <dc.Event>[];
-      for (final ev in events) {
-        if (ev.start == null || ev.eventId == null) continue;
-        final localStart = ev.start!.toLocal();
-        final title = (ev.title ?? 'Evento de Google Calendar').trim();
-        final text = title.toLowerCase();
-        var category = 'cita';
-        if (RegExp(r'examen|electro|ecocardio|laboratorio|análisis').hasMatch(text)) category = 'examen';
-        if (RegExp(r'medicament|pastilla|dosis').hasMatch(text)) category = 'medicamento';
-
-        imported.add(Appointment(
-          id: 'gcal_${ev.eventId}',
-          dateKey: dateKeyOf(localStart),
-          time: '${pad2(localStart.hour)}:${pad2(localStart.minute)}',
-          title: title,
-          category: category,
-        ));
+    try {
+      final result = await FilePicker.platform.pickFiles(withData: true);
+      if (result == null || result.files.isEmpty) {
+        setState(() => _importingCalendar = false);
+        return;
       }
+      final bytes = result.files.first.bytes;
+      if (bytes == null) {
+        setState(() {
+          _importingCalendar = false;
+          _importMessage = 'No se pudo leer el archivo seleccionado.';
+        });
+        return;
+      }
+
+      final text = utf8.decode(bytes, allowMalformed: true);
+      final icsEvents = parseIcsEvents(text);
+      if (icsEvents.isEmpty) {
+        setState(() {
+          _importingCalendar = false;
+          _importMessage = 'El archivo no tiene eventos reconocibles. Confirma que sea un .ics exportado desde Google Calendar.';
+        });
+        return;
+      }
+
+      final imported = icsEvents.map((ev) {
+        final lower = ev.title.toLowerCase();
+        var category = 'cita';
+        if (RegExp(r'examen|electro|ecocardio|laboratorio|análisis').hasMatch(lower)) category = 'examen';
+        if (RegExp(r'medicament|pastilla|dosis').hasMatch(lower)) category = 'medicamento';
+        return Appointment(
+          id: 'ics_${ev.uid}',
+          dateKey: dateKeyOf(ev.start),
+          time: '${pad2(ev.start.hour)}:${pad2(ev.start.minute)}',
+          title: ev.title,
+          category: category,
+        );
+      }).toList();
+
+      final existingIds = _appointments.map((a) => a.id).toSet();
+      final newOnes = imported.where((a) => !existingIds.contains(a.id)).toList();
+      final merged = [..._appointments, ...newOnes]
+        ..sort((a, b) => (a.dateKey + a.time).compareTo(b.dateKey + b.time));
+
+      setState(() {
+        _appointments = merged;
+        _importingCalendar = false;
+        _importMessage = newOnes.isEmpty
+            ? 'No hay eventos nuevos por importar (ya estaban todos).'
+            : 'Se importaron ${newOnes.length} evento(s) desde el archivo .ics.';
+      });
+      await StorageService.saveAppointments(merged);
+    } catch (e) {
+      setState(() {
+        _importingCalendar = false;
+        _importMessage = 'Error al leer el archivo: $e';
+      });
     }
-
-    final existingIds = _appointments.map((a) => a.id).toSet();
-    final newOnes = imported.where((a) => !existingIds.contains(a.id)).toList();
-    final merged = [..._appointments, ...newOnes]
-      ..sort((a, b) => (a.dateKey + a.time).compareTo(b.dateKey + b.time));
-
-    setState(() {
-      _appointments = merged;
-      _importingCalendar = false;
-      _importMessage = newOnes.isEmpty
-          ? 'No hay eventos nuevos por importar (ya estaban todos).'
-          : 'Se importaron ${newOnes.length} evento(s) desde Google Calendar.';
-    });
-    await StorageService.saveAppointments(merged);
-  }
-
-  Future<List<dc.Calendar>?> _pickCalendarsDialog(List<dc.Calendar> calendars) {
-    final selected = <dc.Calendar>{...calendars}; // todos preseleccionados
-    return showDialog<List<dc.Calendar>>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: surface,
-          title: const Text('¿Qué calendarios importar?', style: TextStyle(color: textPrimary)),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView(
-              shrinkWrap: true,
-              children: calendars.map((cal) {
-                final isSelected = selected.contains(cal);
-                return CheckboxListTile(
-                  value: isSelected,
-                  onChanged: (v) => setDialogState(() {
-                    if (v == true) {
-                      selected.add(cal);
-                    } else {
-                      selected.remove(cal);
-                    }
-                  }),
-                  title: Text(cal.name ?? 'Calendario', style: const TextStyle(color: textPrimary)),
-                  subtitle: cal.accountName != null
-                      ? Text(cal.accountName!, style: const TextStyle(color: textMuted, fontSize: 11))
-                      : null,
-                  activeColor: accentTeal,
-                  checkColor: bgDark,
-                );
-              }).toList(),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, <dc.Calendar>[]),
-              child: const Text('Cancelar', style: TextStyle(color: textMuted)),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, selected.toList()),
-              style: FilledButton.styleFrom(backgroundColor: accentTeal),
-              child: const Text('Importar', style: TextStyle(color: bgDark)),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   /* ---------------- Alarma / simulador ---------------- */
@@ -850,7 +876,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: TextStyle(color: textPrimary, fontSize: 15, fontWeight: FontWeight.bold)),
               const SizedBox(height: 4),
               const Text(
-                'Trae los eventos que ya tienes en Google Calendar (los sincronizados con tu cuenta de Google en el teléfono). Es seguro repetirlo: no duplica.',
+                'Exporta tu Google Calendar como archivo .ics (Google Calendar → Configuración → Importar y exportar → Exportar) y elígelo aquí. Es seguro repetirlo: no duplica.',
                 style: TextStyle(color: textMuted, fontSize: 11),
               ),
               const SizedBox(height: 10),
@@ -859,14 +885,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     ? null
                     : () async {
                         Navigator.pop(ctx);
-                        await _importFromGoogleCalendar();
+                        await _importFromIcsFile();
                       },
                 icon: _importingCalendar
                     ? const SizedBox(
                         width: 14, height: 14,
                         child: CircularProgressIndicator(strokeWidth: 2, color: accentTeal))
-                    : const Icon(Icons.sync, color: accentTeal),
-                label: Text(_importingCalendar ? 'Importando…' : 'Importar desde Google Calendar',
+                    : const Icon(Icons.upload_file, color: accentTeal),
+                label: Text(_importingCalendar ? 'Importando…' : 'Elegir archivo .ics para importar',
                     style: const TextStyle(color: accentTeal)),
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: accentTeal),
