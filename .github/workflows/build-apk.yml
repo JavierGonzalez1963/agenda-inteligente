@@ -49,6 +49,10 @@ jobs:
         working-directory: app
         run: python3 ../fuente/scripts/add_proguard_rules.py android/app
 
+      - name: Forzar compileSdk en todos los módulos (evita choques de versión entre plugins)
+        working-directory: app
+        run: python3 ../fuente/scripts/force_compile_sdk_all_modules.py android
+
       - name: Obtener dependencias
         working-directory: app
         run: flutter pub get
