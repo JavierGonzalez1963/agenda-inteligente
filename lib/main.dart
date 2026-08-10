@@ -668,8 +668,8 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _listening = true);
     await _speech.listen(
       localeId: 'es_ES',
-      listenFor: const Duration(seconds: 12),
-      pauseFor: const Duration(seconds: 3),
+      listenFor: const Duration(seconds: 25),
+      pauseFor: const Duration(seconds: 5),
       onResult: (SpeechRecognitionResult result) {
         if (result.finalResult) {
           _handleVoiceCommand(result.recognizedWords);
