@@ -51,6 +51,7 @@ class Appointment {
   final String time; // HH:mm (24h)
   final String title;
   final String category; // cita | examen | medicamento
+  final String notes; // dirección, médico, o cualquier detalle adicional
 
   Appointment({
     required this.id,
@@ -58,7 +59,24 @@ class Appointment {
     required this.time,
     required this.title,
     required this.category,
+    this.notes = '',
   });
+
+  Appointment copyWith({
+    String? dateKey,
+    String? time,
+    String? title,
+    String? category,
+    String? notes,
+  }) =>
+      Appointment(
+        id: id,
+        dateKey: dateKey ?? this.dateKey,
+        time: time ?? this.time,
+        title: title ?? this.title,
+        category: category ?? this.category,
+        notes: notes ?? this.notes,
+      );
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -66,6 +84,7 @@ class Appointment {
         'time': time,
         'title': title,
         'category': category,
+        'notes': notes,
       };
 
   factory Appointment.fromJson(Map<String, dynamic> j) => Appointment(
@@ -74,6 +93,7 @@ class Appointment {
         time: j['time'],
         title: j['title'],
         category: j['category'],
+        notes: j['notes'] ?? '',
       );
 
   IconData get icon {
@@ -787,6 +807,129 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _showEditApptDialog(Appointment appt) async {
+    final titleController = TextEditingController(text: appt.title);
+    final notesController = TextEditingController(text: appt.notes);
+    String time = appt.time;
+    String category = appt.category;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: surface,
+          title: const Text('Editar cita', style: TextStyle(color: textPrimary)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: titleController,
+                  style: const TextStyle(color: textPrimary),
+                  decoration: const InputDecoration(
+                    labelText: 'Título',
+                    labelStyle: TextStyle(color: textMuted),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: notesController,
+                  maxLines: 3,
+                  style: const TextStyle(color: textPrimary),
+                  decoration: const InputDecoration(
+                    labelText: 'Notas (dirección, médico, etc.)',
+                    labelStyle: TextStyle(color: textMuted),
+                    hintText: 'Ej: Consultorio 302, Dr. Pérez',
+                    hintStyle: TextStyle(color: textMuted, fontSize: 12),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Hora', style: TextStyle(color: textPrimary)),
+                  trailing: Text(formatTime12(time),
+                      style: const TextStyle(color: accentGold, fontWeight: FontWeight.bold)),
+                  onTap: () async {
+                    final parts = time.split(':');
+                    final picked = await showTimePicker(
+                      context: ctx,
+                      initialTime: TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1])),
+                    );
+                    if (picked != null) {
+                      setDialogState(() => time = '${pad2(picked.hour)}:${pad2(picked.minute)}');
+                    }
+                  },
+                ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    _categoryChip('cita', 'Cita', category, (v) => setDialogState(() => category = v)),
+                    _categoryChip('examen', 'Examen', category, (v) => setDialogState(() => category = v)),
+                    _categoryChip('medicamento', 'Medicamento', category, (v) => setDialogState(() => category = v)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await _deleteAppt(appt);
+              },
+              child: const Text('Borrar', style: TextStyle(color: accentCoral)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancelar', style: TextStyle(color: textMuted)),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await _updateAppt(appt.copyWith(
+                  title: titleController.text.trim().isEmpty ? appt.title : titleController.text.trim(),
+                  notes: notesController.text.trim(),
+                  time: time,
+                  category: category,
+                ));
+              },
+              style: FilledButton.styleFrom(backgroundColor: accentGold),
+              child: const Text('Guardar', style: TextStyle(color: bgDark)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _categoryChip(String value, String label, String selected, ValueChanged<String> onSelect) {
+    final isSelected = value == selected;
+    return ChoiceChip(
+      label: Text(label),
+      selected: isSelected,
+      onSelected: (_) => onSelect(value),
+      labelStyle: TextStyle(color: isSelected ? bgDark : textMuted, fontSize: 12),
+      selectedColor: accentGold,
+      backgroundColor: bgDark,
+      side: BorderSide(color: isSelected ? accentGold : Colors.white12),
+    );
+  }
+
+  Future<void> _updateAppt(Appointment updated) async {
+    final merged = _appointments.map((a) => a.id == updated.id ? updated : a).toList()
+      ..sort((a, b) => (a.dateKey + a.time).compareTo(b.dateKey + b.time));
+    setState(() => _appointments = merged);
+    await StorageService.saveAppointments(merged);
+  }
+
+  Future<void> _deleteAppt(Appointment appt) async {
+    final merged = _appointments.where((a) => a.id != appt.id).toList();
+    setState(() => _appointments = merged);
+    await StorageService.saveAppointments(merged);
+  }
+
   Future<void> _showIcsPasteDialog() async {
     final controller = TextEditingController();
     await showDialog(
@@ -1083,7 +1226,12 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withOpacity(0.05)),
       ),
-      child: Row(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => _showEditApptDialog(a),
+          child: Row(
         children: [
           Container(width: 5, height: 56, decoration: BoxDecoration(
             color: a.color,
@@ -1097,17 +1245,29 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(a.title, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
-                Text(formatTime12(a.time), style: const TextStyle(color: textMuted, fontSize: 12)),
-              ],
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(a.title, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text(formatTime12(a.time), style: const TextStyle(color: textMuted, fontSize: 12)),
+                  if (a.notes.trim().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(a.notes, style: const TextStyle(color: textMuted, fontSize: 11, fontStyle: FontStyle.italic),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                ],
+              ),
             ),
           ),
-          const SizedBox(width: 8),
+          const Icon(Icons.edit_outlined, color: textMuted, size: 16),
+          const SizedBox(width: 12),
         ],
+          ),
+        ),
       ),
     );
   }
