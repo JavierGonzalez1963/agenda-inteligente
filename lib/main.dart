@@ -812,6 +812,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final notesController = TextEditingController(text: appt.notes);
     String time = appt.time;
     String category = appt.category;
+    DateTime date = DateTime.parse(appt.dateKey);
 
     await showDialog(
       context: context,
@@ -845,6 +846,25 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 const SizedBox(height: 12),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Fecha', style: TextStyle(color: textPrimary)),
+                  trailing: Text(
+                    '${date.day} de ${mesesAnio[date.month - 1]} de ${date.year}',
+                    style: const TextStyle(color: accentTeal, fontWeight: FontWeight.bold),
+                  ),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: ctx,
+                      initialDate: date,
+                      firstDate: DateTime(date.year - 3),
+                      lastDate: DateTime(date.year + 5),
+                    );
+                    if (picked != null) {
+                      setDialogState(() => date = dateOnly(picked));
+                    }
+                  },
+                ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Hora', style: TextStyle(color: textPrimary)),
@@ -893,6 +913,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   notes: notesController.text.trim(),
                   time: time,
                   category: category,
+                  dateKey: dateKeyOf(date),
                 ));
               },
               style: FilledButton.styleFrom(backgroundColor: accentGold),
@@ -922,6 +943,9 @@ class _HomeScreenState extends State<HomeScreen> {
       ..sort((a, b) => (a.dateKey + a.time).compareTo(b.dateKey + b.time));
     setState(() => _appointments = merged);
     await StorageService.saveAppointments(merged);
+    if (updated.dateKey != dateKeyOf(_selectedDate)) {
+      _jumpToDate(DateTime.parse(updated.dateKey));
+    }
   }
 
   Future<void> _deleteAppt(Appointment appt) async {
