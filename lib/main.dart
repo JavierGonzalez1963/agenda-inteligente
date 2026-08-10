@@ -8,7 +8,6 @@ import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
-import 'package:file_picker/file_picker.dart';
 
 /* ============================================================
    COLORES (mismos tokens que el prototipo React)
@@ -729,35 +728,26 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /* ---------------- Importar desde archivo .ics de Google Calendar ---------------- */
-  /// Lee un archivo .ics (el formato estándar que exporta Google Calendar)
-  /// elegido por el usuario y trae sus eventos a la agenda local.
-  /// No depende de ningún plugin nativo: es un parser propio en Dart puro,
-  /// así que no tiene los bugs de leer el calendario del sistema operativo.
+  /* ---------------- Importar desde texto .ics de Google Calendar ---------------- */
+  /// Recibe el TEXTO del archivo .ics (el usuario lo pega, tras abrir el
+  /// archivo con un lector de texto y copiarlo) y trae sus eventos a la
+  /// agenda local. No depende de ningún plugin nativo -- ni para elegir
+  /// el archivo ni para leer el calendario del sistema -- así que no
+  /// puede fallar por incompatibilidades de plugins con Android.
   /// Es segura de correr varias veces: no duplica eventos ya importados.
-  Future<void> _importFromIcsFile() async {
+  Future<void> _importFromIcsText(String text) async {
     setState(() { _importingCalendar = true; _importMessage = null; });
     try {
-      final result = await FilePicker.platform.pickFiles(withData: true);
-      if (result == null || result.files.isEmpty) {
+      if (text.trim().isEmpty) {
         setState(() => _importingCalendar = false);
         return;
       }
-      final bytes = result.files.first.bytes;
-      if (bytes == null) {
-        setState(() {
-          _importingCalendar = false;
-          _importMessage = 'No se pudo leer el archivo seleccionado.';
-        });
-        return;
-      }
 
-      final text = utf8.decode(bytes, allowMalformed: true);
       final icsEvents = parseIcsEvents(text);
       if (icsEvents.isEmpty) {
         setState(() {
           _importingCalendar = false;
-          _importMessage = 'El archivo no tiene eventos reconocibles. Confirma que sea un .ics exportado desde Google Calendar.';
+          _importMessage = 'No se reconoció ningún evento en ese texto. Confirma que sea el contenido completo de un archivo .ics exportado desde Google Calendar.';
         });
         return;
       }
@@ -795,6 +785,44 @@ class _HomeScreenState extends State<HomeScreen> {
         _importMessage = 'Error al leer el archivo: $e';
       });
     }
+  }
+
+  Future<void> _showIcsPasteDialog() async {
+    final controller = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: surface,
+        title: const Text('Pegar contenido del .ics', style: TextStyle(color: textPrimary)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: 10,
+            style: const TextStyle(color: textPrimary, fontSize: 12, fontFamily: 'monospace'),
+            decoration: const InputDecoration(
+              hintText: 'BEGIN:VCALENDAR\n...',
+              hintStyle: TextStyle(color: textMuted),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: textMuted)),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _importFromIcsText(controller.text);
+            },
+            style: FilledButton.styleFrom(backgroundColor: accentTeal),
+            child: const Text('Importar', style: TextStyle(color: bgDark)),
+          ),
+        ],
+      ),
+    );
   }
 
   /* ---------------- Alarma / simulador ---------------- */
@@ -876,23 +904,23 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: TextStyle(color: textPrimary, fontSize: 15, fontWeight: FontWeight.bold)),
               const SizedBox(height: 4),
               const Text(
-                'Exporta tu Google Calendar como archivo .ics (Google Calendar → Configuración → Importar y exportar → Exportar) y elígelo aquí. Es seguro repetirlo: no duplica.',
+                'Exporta tu Google Calendar como archivo .ics (Google Calendar → Configuración → Importar y exportar → Exportar), ábrelo con un lector de texto en el teléfono, copia todo el contenido y pégalo aquí. Es seguro repetirlo: no duplica.',
                 style: TextStyle(color: textMuted, fontSize: 11),
               ),
               const SizedBox(height: 10),
               OutlinedButton.icon(
                 onPressed: _importingCalendar
                     ? null
-                    : () async {
+                    : () {
                         Navigator.pop(ctx);
-                        await _importFromIcsFile();
+                        _showIcsPasteDialog();
                       },
                 icon: _importingCalendar
                     ? const SizedBox(
                         width: 14, height: 14,
                         child: CircularProgressIndicator(strokeWidth: 2, color: accentTeal))
-                    : const Icon(Icons.upload_file, color: accentTeal),
-                label: Text(_importingCalendar ? 'Importando…' : 'Elegir archivo .ics para importar',
+                    : const Icon(Icons.content_paste, color: accentTeal),
+                label: Text(_importingCalendar ? 'Importando…' : 'Pegar contenido .ics para importar',
                     style: const TextStyle(color: accentTeal)),
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: accentTeal),
