@@ -418,21 +418,47 @@ class VoiceParser {
     var targetDate = dateOnly(reference);
     String? matchedDatePhrase;
 
-    if (text.contains('mañana') || text.contains('manana')) {
-      targetDate = targetDate.add(const Duration(days: 1));
-      matchedDatePhrase = text.contains('mañana') ? 'mañana' : 'manana';
-    } else if (text.contains('hoy')) {
-      matchedDatePhrase = 'hoy';
-    } else {
-      for (var i = 0; i < diasSemana.length; i++) {
-        final name = diasSemana[i];
-        if (text.contains(name)) {
-          final todayDow = reference.weekday % 7; // domingo=0 ... sábado=6
-          var diff = i - todayDow;
-          if (diff <= 0) diff += 7;
-          targetDate = dateOnly(reference).add(Duration(days: diff));
-          matchedDatePhrase = name;
-          break;
+    // Fecha explícita: "20 de agosto" o "el 20 de agosto de 2026".
+    // La revisamos primero porque es más específica que "mañana"/"lunes".
+    final explicitDateRegex = RegExp(
+      r'(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(?:\s+de\s+(\d{4}))?',
+      caseSensitive: false,
+    );
+    final explicitMatch = explicitDateRegex.firstMatch(text);
+
+    if (explicitMatch != null) {
+      final day = int.parse(explicitMatch.group(1)!);
+      final monthName = explicitMatch.group(2)!.toLowerCase();
+      final monthIndex = mesesAnio.indexOf(monthName) + 1;
+      if (monthIndex > 0 && day >= 1 && day <= 31) {
+        final year = explicitMatch.group(3) != null ? int.parse(explicitMatch.group(3)!) : reference.year;
+        var candidate = DateTime(year, monthIndex, day);
+        // Si no dijo el año y esa fecha ya pasó este año, asumimos el año que viene.
+        if (explicitMatch.group(3) == null && candidate.isBefore(dateOnly(reference))) {
+          candidate = DateTime(year + 1, monthIndex, day);
+        }
+        targetDate = candidate;
+        matchedDatePhrase = explicitMatch.group(0);
+      }
+    }
+
+    if (matchedDatePhrase == null) {
+      if (text.contains('mañana') || text.contains('manana')) {
+        targetDate = targetDate.add(const Duration(days: 1));
+        matchedDatePhrase = text.contains('mañana') ? 'mañana' : 'manana';
+      } else if (text.contains('hoy')) {
+        matchedDatePhrase = 'hoy';
+      } else {
+        for (var i = 0; i < diasSemana.length; i++) {
+          final name = diasSemana[i];
+          if (text.contains(name)) {
+            final todayDow = reference.weekday % 7; // domingo=0 ... sábado=6
+            var diff = i - todayDow;
+            if (diff <= 0) diff += 7;
+            targetDate = dateOnly(reference).add(Duration(days: diff));
+            matchedDatePhrase = name;
+            break;
+          }
         }
       }
     }
@@ -994,6 +1020,216 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /* ---------------- Alarma / simulador ---------------- */
 
+  /* ---------------- Listado de próximos eventos (rango + búsqueda) ---------------- */
+
+  Future<void> _showUpcomingListDialog() async {
+    int rangeDays = 60;
+    DateTime? customStart;
+    DateTime? customEnd;
+    bool useCustomRange = false;
+    final keywordController = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: surface,
+          title: const Text('Ver próximos eventos', style: TextStyle(color: textPrimary)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Rango de días', style: TextStyle(color: textMuted, fontSize: 12)),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [7, 15, 30, 60, 90].map((d) {
+                    final isSelected = !useCustomRange && rangeDays == d;
+                    return ChoiceChip(
+                      label: Text('$d días'),
+                      selected: isSelected,
+                      onSelected: (_) => setDialogState(() {
+                        rangeDays = d;
+                        useCustomRange = false;
+                      }),
+                      labelStyle: TextStyle(color: isSelected ? bgDark : textMuted, fontSize: 12),
+                      selectedColor: accentTeal,
+                      backgroundColor: bgDark,
+                      side: BorderSide(color: isSelected ? accentTeal : Colors.white12),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 10),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    useCustomRange && customStart != null && customEnd != null
+                        ? 'Del ${customStart!.day}/${customStart!.month} al ${customEnd!.day}/${customEnd!.month}'
+                        : 'O elige un rango de fechas personalizado',
+                    style: const TextStyle(color: textPrimary, fontSize: 13),
+                  ),
+                  trailing: const Icon(Icons.date_range, color: accentGold, size: 18),
+                  onTap: () async {
+                    final today = _epochToday;
+                    final picked = await showDateRangePicker(
+                      context: ctx,
+                      firstDate: today.subtract(const Duration(days: 365)),
+                      lastDate: today.add(const Duration(days: 730)),
+                      initialDateRange: DateTimeRange(start: today, end: today.add(const Duration(days: 60))),
+                    );
+                    if (picked != null) {
+                      setDialogState(() {
+                        customStart = dateOnly(picked.start);
+                        customEnd = dateOnly(picked.end);
+                        useCustomRange = true;
+                      });
+                    }
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: keywordController,
+                  style: const TextStyle(color: textPrimary),
+                  decoration: const InputDecoration(
+                    labelText: 'Buscar tipo de evento (opcional)',
+                    labelStyle: TextStyle(color: textMuted),
+                    hintText: 'Ej: inyección',
+                    hintStyle: TextStyle(color: textMuted, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancelar', style: TextStyle(color: textMuted)),
+            ),
+            FilledButton(
+              onPressed: () {
+                final today = _epochToday;
+                final start = useCustomRange && customStart != null ? customStart! : today;
+                final end = useCustomRange && customEnd != null
+                    ? customEnd!
+                    : today.add(Duration(days: rangeDays));
+                Navigator.pop(ctx);
+                _openUpcomingListPage(start, end, keywordController.text.trim());
+              },
+              style: FilledButton.styleFrom(backgroundColor: accentGold),
+              child: const Text('Ver listado', style: TextStyle(color: bgDark)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openUpcomingListPage(DateTime start, DateTime end, String keyword) {
+    final startKey = dateKeyOf(start);
+    final endKey = dateKeyOf(end);
+    final kw = keyword.toLowerCase();
+    final filtered = _appointments.where((a) {
+      final inRange = a.dateKey.compareTo(startKey) >= 0 && a.dateKey.compareTo(endKey) <= 0;
+      if (!inRange) return false;
+      if (kw.isEmpty) return true;
+      return a.title.toLowerCase().contains(kw) ||
+          a.notes.toLowerCase().contains(kw) ||
+          a.category.toLowerCase().contains(kw);
+    }).toList()
+      ..sort((a, b) => (a.dateKey + a.time).compareTo(b.dateKey + b.time));
+
+    final Map<String, List<Appointment>> grouped = {};
+    for (final a in filtered) {
+      grouped.putIfAbsent(a.dateKey, () => []).add(a);
+    }
+    final dateKeys = grouped.keys.toList()..sort();
+
+    Navigator.push(context, MaterialPageRoute(builder: (pageCtx) {
+      return Scaffold(
+        backgroundColor: bgDark,
+        appBar: AppBar(
+          backgroundColor: bgDark,
+          elevation: 0,
+          iconTheme: const IconThemeData(color: textPrimary),
+          title: Text(
+            keyword.isEmpty ? 'Próximos eventos' : 'Eventos: "$keyword"',
+            style: const TextStyle(color: textPrimary, fontSize: 16),
+          ),
+        ),
+        body: dateKeys.isEmpty
+            ? const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Text('No se encontraron eventos en ese rango.',
+                      style: TextStyle(color: textMuted), textAlign: TextAlign.center),
+                ),
+              )
+            : ListView.builder(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                itemCount: dateKeys.length,
+                itemBuilder: (context, index) {
+                  final key = dateKeys[index];
+                  final date = DateTime.parse(key);
+                  final dayAppts = grouped[key]!;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${diasSemana[date.weekday % 7][0].toUpperCase()}${diasSemana[date.weekday % 7].substring(1)}, ${date.day} de ${mesesAnio[date.month - 1]} de ${date.year}',
+                          style: const TextStyle(color: accentGold, fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        const SizedBox(height: 8),
+                        for (final a in dayAppts)
+                          InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () {
+                              Navigator.pop(pageCtx);
+                              _jumpToDate(DateTime.parse(a.dateKey));
+                            },
+                            child: Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: surface,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 30, height: 30,
+                                    decoration: BoxDecoration(
+                                        color: a.color.withOpacity(0.15), borderRadius: BorderRadius.circular(9)),
+                                    child: Icon(a.icon, color: a.color, size: 15),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(a.title,
+                                            style: const TextStyle(color: textPrimary, fontSize: 13),
+                                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        Text(formatTime12(a.time), style: const TextStyle(color: textMuted, fontSize: 11)),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+      );
+    }));
+  }
+
   Future<void> _openAlarmSettings() async {
     await showModalBottomSheet(
       context: context,
@@ -1167,6 +1403,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(_handsFree ? Icons.hearing : Icons.hearing_disabled,
                 color: _handsFree ? accentTeal : textMuted),
             tooltip: 'Modo manos libres: di "AGENDA"',
+          ),
+          IconButton(
+            onPressed: _showUpcomingListDialog,
+            icon: const Icon(Icons.list_alt, color: textMuted),
+            tooltip: 'Ver listado de próximos eventos',
           ),
           IconButton(
             onPressed: _openAlarmSettings,
