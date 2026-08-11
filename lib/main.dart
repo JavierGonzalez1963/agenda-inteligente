@@ -424,24 +424,46 @@ class VoiceParser {
     var targetDate = dateOnly(reference);
     String? matchedDatePhrase;
 
-    // Fecha explícita: "20 de agosto" o "el 20 de agosto de 2026".
-    // La revisamos primero porque es más específica que "mañana"/"lunes".
-    final explicitDateRegex = RegExp(
-      r'(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(?:\s+de\s+(\d{4}))?',
+    // Fecha explícita, en cualquiera de los dos órdenes en que la gente
+    // la dicta: "20 de agosto" / "el 20 de agosto de 2026", o también
+    // "agosto 20" (mes primero, sin "de" en medio).
+    final monthNamesPattern =
+        'enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre';
+    final dayThenMonthRegex = RegExp(
+      r'(\d{1,2})\s+de\s+(' + monthNamesPattern + r')(?:\s+de\s+(\d{4}))?',
       caseSensitive: false,
     );
-    final explicitMatch = explicitDateRegex.firstMatch(text);
+    final monthThenDayRegex = RegExp(
+      r'(' + monthNamesPattern + r')\s+(\d{1,2})(?:\s+de\s+(\d{4}))?',
+      caseSensitive: false,
+    );
+
+    RegExpMatch? explicitMatch = dayThenMonthRegex.firstMatch(text);
+    int? explicitDay;
+    String? explicitMonthName;
+    String? explicitYear;
 
     if (explicitMatch != null) {
-      final day = int.parse(explicitMatch.group(1)!);
-      final monthName = explicitMatch.group(2)!.toLowerCase();
-      final monthIndex = mesesAnio.indexOf(monthName) + 1;
-      if (monthIndex > 0 && day >= 1 && day <= 31) {
-        final year = explicitMatch.group(3) != null ? int.parse(explicitMatch.group(3)!) : reference.year;
-        var candidate = DateTime(year, monthIndex, day);
+      explicitDay = int.parse(explicitMatch.group(1)!);
+      explicitMonthName = explicitMatch.group(2)!.toLowerCase();
+      explicitYear = explicitMatch.group(3);
+    } else {
+      explicitMatch = monthThenDayRegex.firstMatch(text);
+      if (explicitMatch != null) {
+        explicitMonthName = explicitMatch.group(1)!.toLowerCase();
+        explicitDay = int.parse(explicitMatch.group(2)!);
+        explicitYear = explicitMatch.group(3);
+      }
+    }
+
+    if (explicitMatch != null && explicitDay != null && explicitMonthName != null) {
+      final monthIndex = mesesAnio.indexOf(explicitMonthName) + 1;
+      if (monthIndex > 0 && explicitDay >= 1 && explicitDay <= 31) {
+        final year = explicitYear != null ? int.parse(explicitYear) : reference.year;
+        var candidate = DateTime(year, monthIndex, explicitDay);
         // Si no dijo el año y esa fecha ya pasó este año, asumimos el año que viene.
-        if (explicitMatch.group(3) == null && candidate.isBefore(dateOnly(reference))) {
-          candidate = DateTime(year + 1, monthIndex, day);
+        if (explicitYear == null && candidate.isBefore(dateOnly(reference))) {
+          candidate = DateTime(year + 1, monthIndex, explicitDay);
         }
         targetDate = candidate;
         matchedDatePhrase = explicitMatch.group(0);
