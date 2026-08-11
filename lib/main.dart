@@ -52,6 +52,7 @@ class Appointment {
   final String title;
   final String category; // cita | examen | medicamento
   final String notes; // dirección, médico, o cualquier detalle adicional
+  final bool completed; // marcada como cumplida, sin borrarla
 
   Appointment({
     required this.id,
@@ -60,6 +61,7 @@ class Appointment {
     required this.title,
     required this.category,
     this.notes = '',
+    this.completed = false,
   });
 
   Appointment copyWith({
@@ -68,6 +70,7 @@ class Appointment {
     String? title,
     String? category,
     String? notes,
+    bool? completed,
   }) =>
       Appointment(
         id: id,
@@ -76,6 +79,7 @@ class Appointment {
         title: title ?? this.title,
         category: category ?? this.category,
         notes: notes ?? this.notes,
+        completed: completed ?? this.completed,
       );
 
   Map<String, dynamic> toJson() => {
@@ -85,6 +89,7 @@ class Appointment {
         'title': title,
         'category': category,
         'notes': notes,
+        'completed': completed,
       };
 
   factory Appointment.fromJson(Map<String, dynamic> j) => Appointment(
@@ -94,6 +99,7 @@ class Appointment {
         title: j['title'],
         category: j['category'],
         notes: j['notes'] ?? '',
+        completed: j['completed'] ?? false,
       );
 
   IconData get icon {
@@ -463,8 +469,11 @@ class VoiceParser {
       }
     }
 
+    // Exigimos "a las" antes del número: así un número suelto que sea
+    // parte de la fecha (como el "15" de "15 de agosto") nunca se
+    // confunde con una hora.
     final timeRegex = RegExp(
-      r'(\d{1,2})(?::(\d{2}))?\s*(a\.?\s?m\.?|p\.?\s?m\.?|de la mañana|de la tarde|de la noche)?',
+      r'a\s+las\s+(\d{1,2})(?::(\d{2}))?\s*(a\.?\s?m\.?|p\.?\s?m\.?|de la mañana|de la tarde|de la noche)?',
       caseSensitive: false,
     );
     final timeMatch = timeRegex.firstMatch(text);
@@ -980,6 +989,14 @@ class _HomeScreenState extends State<HomeScreen> {
     await StorageService.saveAppointments(merged);
   }
 
+  Future<void> _toggleCompleted(Appointment appt) async {
+    final merged = _appointments
+        .map((a) => a.id == appt.id ? a.copyWith(completed: !a.completed) : a)
+        .toList();
+    setState(() => _appointments = merged);
+    await StorageService.saveAppointments(merged);
+  }
+
   Future<void> _showIcsPasteDialog() async {
     final controller = TextEditingController();
     await showDialog(
@@ -1491,48 +1508,78 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withOpacity(0.05)),
       ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => _showEditApptDialog(a),
-          child: Row(
+      child: Row(
         children: [
           Container(width: 5, height: 56, decoration: BoxDecoration(
             color: a.color,
             borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
           )),
-          const SizedBox(width: 12),
-          Container(
-            width: 36, height: 36,
-            decoration: BoxDecoration(color: a.color.withOpacity(0.15), borderRadius: BorderRadius.circular(12)),
-            child: Icon(a.icon, color: a.color, size: 18),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(a.title, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
-                  Text(formatTime12(a.time), style: const TextStyle(color: textMuted, fontSize: 12)),
-                  if (a.notes.trim().isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(a.notes, style: const TextStyle(color: textMuted, fontSize: 11, fontStyle: FontStyle.italic),
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                    ),
-                ],
+          // check de "cumplida": toque propio, independiente del que abre editar
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: () => _toggleCompleted(a),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Icon(
+                  a.completed ? Icons.check_circle : Icons.radio_button_unchecked,
+                  color: a.completed ? accentTeal : textMuted,
+                  size: 22,
+                ),
               ),
             ),
           ),
-          const Icon(Icons.edit_outlined, color: textMuted, size: 16),
-          const SizedBox(width: 12),
-        ],
+          Expanded(
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () => _showEditApptDialog(a),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 36, height: 36,
+                        decoration: BoxDecoration(color: a.color.withOpacity(0.15), borderRadius: BorderRadius.circular(12)),
+                        child: Icon(a.icon, color: a.color, size: 18),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              a.title,
+                              style: TextStyle(
+                                color: a.completed ? textMuted : textPrimary,
+                                fontWeight: FontWeight.w500,
+                                decoration: a.completed ? TextDecoration.lineThrough : TextDecoration.none,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(formatTime12(a.time), style: const TextStyle(color: textMuted, fontSize: 12)),
+                            if (a.notes.trim().isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Text(a.notes, style: const TextStyle(color: textMuted, fontSize: 11, fontStyle: FontStyle.italic),
+                                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.edit_outlined, color: textMuted, size: 16),
+                      const SizedBox(width: 12),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
