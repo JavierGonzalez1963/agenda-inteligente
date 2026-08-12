@@ -528,16 +528,36 @@ class VoiceParser {
     var title = text;
     if (matchedTimePhrase != null) title = title.replaceAll(matchedTimePhrase, ' ');
     if (matchedDatePhrase != null) title = title.replaceAll(matchedDatePhrase, ' ');
-
-    const fillers = [
-      'agregar', 'añade', 'añadir', 'crear', 'poner', 'programa', 'programar',
-      'agenda', 'agendar', 'recuérdame', 'recuerdame', 'recordar', 'por favor',
-      'a las', 'para el', 'para', 'el día', 'el', 'de la mañana', 'de la tarde', 'de la noche'
-    ];
-    for (final f in fillers) {
-      title = title.replaceAll(RegExp('\\b$f\\b'), ' ');
-    }
     title = title.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    // Solo quitamos estas palabras cuando están AL PRINCIPIO de lo que
+    // queda (son verbos de mando, como "agrega cita..." o "programa
+    // recordatorio..."). Así, si alguna de estas palabras forma parte
+    // real del título más adelante en la frase (ej. "probar programa
+    // agenda"), no se borra.
+    const leadingFillers = [
+      'agregar', 'añade', 'añadir', 'crear', 'poner', 'pon',
+      'programa', 'programar', 'agenda', 'agendar',
+      'recuérdame', 'recuerdame', 'recordar', 'por favor',
+      'para el', 'para', 'el día', 'el',
+    ];
+    var strippedSomething = true;
+    while (strippedSomething) {
+      strippedSomething = false;
+      final lower = title.toLowerCase();
+      for (final f in leadingFillers) {
+        if (lower == f) {
+          title = '';
+          strippedSomething = true;
+          break;
+        }
+        if (lower.startsWith('$f ')) {
+          title = title.substring(f.length).trim();
+          strippedSomething = true;
+          break;
+        }
+      }
+    }
     if (title.isEmpty) title = 'Nuevo evento';
     title = title[0].toUpperCase() + title.substring(1);
 
