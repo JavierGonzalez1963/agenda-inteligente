@@ -491,29 +491,37 @@ class VoiceParser {
       }
     }
 
-    // Exigimos "a las" antes del número: así un número suelto que sea
-    // parte de la fecha (como el "15" de "15 de agosto") nunca se
-    // confunde con una hora.
+    // Reconoce la hora en dos formas: "a las 9 am" / "a las nueve" (con
+    // "a las", el am/pm es opcional), o una hora suelta como "3 pm" (sin
+    // "a las", pero entonces el am/pm es obligatorio). Así evitamos que
+    // un número suelto que sea parte de la fecha (como el "15" de
+    // "15 de agosto") se confunda con una hora, sin dejar de reconocer
+    // cuando alguien dice la hora sin decir "a las" primero.
     final timeRegex = RegExp(
-      r'a\s+las\s+(\d{1,2})(?::(\d{2}))?\s*(a\.?\s?m\.?|p\.?\s?m\.?|de la mañana|de la tarde|de la noche)?',
+      r'(?:a\s+las\s+(\d{1,2})(?::(\d{2}))?\s*(a\.?\s?m\.?|p\.?\s?m\.?|de la mañana|de la tarde|de la noche)?)'
+      r'|(?:(\d{1,2})(?::(\d{2}))?\s*(a\.?\s?m\.?|p\.?\s?m\.?|de la mañana|de la tarde|de la noche))',
       caseSensitive: false,
     );
     final timeMatch = timeRegex.firstMatch(text);
     String? timeStr;
     String? matchedTimePhrase;
 
-    if (timeMatch != null && timeMatch.group(1) != null) {
-      int h = int.parse(timeMatch.group(1)!);
-      final min = timeMatch.group(2) != null ? int.parse(timeMatch.group(2)!) : 0;
-      final mod = (timeMatch.group(3) ?? '').toLowerCase();
-      matchedTimePhrase = timeMatch.group(0);
-      if (mod.contains('p') || mod.contains('tarde') || mod.contains('noche')) {
-        if (h < 12) h += 12;
-      } else if (mod.contains('a') || mod.contains('mañana')) {
-        if (h == 12) h = 0;
-      }
-      if (h >= 0 && h <= 23 && min >= 0 && min <= 59) {
-        timeStr = '${pad2(h)}:${pad2(min)}';
+    if (timeMatch != null) {
+      final hStr = timeMatch.group(1) ?? timeMatch.group(4);
+      if (hStr != null) {
+        int h = int.parse(hStr);
+        final minStr = timeMatch.group(2) ?? timeMatch.group(5);
+        final min = minStr != null ? int.parse(minStr) : 0;
+        final mod = (timeMatch.group(3) ?? timeMatch.group(6) ?? '').toLowerCase();
+        matchedTimePhrase = timeMatch.group(0);
+        if (mod.contains('p') || mod.contains('tarde') || mod.contains('noche')) {
+          if (h < 12) h += 12;
+        } else if (mod.contains('a') || mod.contains('mañana')) {
+          if (h == 12) h = 0;
+        }
+        if (h >= 0 && h <= 23 && min >= 0 && min <= 59) {
+          timeStr = '${pad2(h)}:${pad2(min)}';
+        }
       }
     }
 
@@ -690,24 +698,164 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _handleVoiceCommand(String transcript) async {
     final parsed = VoiceParser.parse(transcript, DateTime.now());
+    await _showVoiceConfirmDialog(parsed, transcript);
+  }
+
+  Future<void> _showVoiceConfirmDialog(ParsedCommand parsed, String rawTranscript) async {
+    final titleController = TextEditingController(text: parsed.title);
+    final notesController = TextEditingController();
+    String time = parsed.time;
+    String category = parsed.category;
+    DateTime date = parsed.dateObj;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: surface,
+          title: const Text('¿Así quedó bien?', style: TextStyle(color: textPrimary)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: bgDark,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    'Escuché: "$rawTranscript"',
+                    style: const TextStyle(color: textMuted, fontSize: 11, fontStyle: FontStyle.italic),
+                  ),
+                ),
+                if (!parsed.hasDate)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Text('⚠️ No detecté una fecha clara — revisa el día abajo.',
+                        style: TextStyle(color: accentCoral, fontSize: 11)),
+                  ),
+                if (!parsed.hasTime)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Text('⚠️ No detecté una hora clara — revisa la hora abajo.',
+                        style: TextStyle(color: accentCoral, fontSize: 11)),
+                  ),
+                TextField(
+                  controller: titleController,
+                  style: const TextStyle(color: textPrimary),
+                  decoration: const InputDecoration(
+                    labelText: 'Título',
+                    labelStyle: TextStyle(color: textMuted),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: notesController,
+                  maxLines: 3,
+                  style: const TextStyle(color: textPrimary),
+                  decoration: const InputDecoration(
+                    labelText: 'Notas (dirección, médico, etc.)',
+                    labelStyle: TextStyle(color: textMuted),
+                    hintText: 'Ej: Consultorio 302, Dr. Pérez',
+                    hintStyle: TextStyle(color: textMuted, fontSize: 12),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Fecha', style: TextStyle(color: textPrimary)),
+                  trailing: Text(
+                    '${date.day} de ${mesesAnio[date.month - 1]} de ${date.year}',
+                    style: const TextStyle(color: accentTeal, fontWeight: FontWeight.bold),
+                  ),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: ctx,
+                      initialDate: date,
+                      firstDate: DateTime(date.year - 1),
+                      lastDate: DateTime(date.year + 5),
+                    );
+                    if (picked != null) {
+                      setDialogState(() => date = dateOnly(picked));
+                    }
+                  },
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Hora', style: TextStyle(color: textPrimary)),
+                  trailing: Text(formatTime12(time),
+                      style: const TextStyle(color: accentGold, fontWeight: FontWeight.bold)),
+                  onTap: () async {
+                    final parts = time.split(':');
+                    final picked = await showTimePicker(
+                      context: ctx,
+                      initialTime: TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1])),
+                    );
+                    if (picked != null) {
+                      setDialogState(() => time = '${pad2(picked.hour)}:${pad2(picked.minute)}');
+                    }
+                  },
+                ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    _categoryChip('cita', 'Cita', category, (v) => setDialogState(() => category = v)),
+                    _categoryChip('examen', 'Examen', category, (v) => setDialogState(() => category = v)),
+                    _categoryChip('medicamento', 'Medicamento', category, (v) => setDialogState(() => category = v)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Descartar', style: TextStyle(color: textMuted)),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await _saveNewAppointment(
+                  title: titleController.text.trim().isEmpty ? 'Nuevo evento' : titleController.text.trim(),
+                  notes: notesController.text.trim(),
+                  time: time,
+                  category: category,
+                  date: date,
+                );
+              },
+              style: FilledButton.styleFrom(backgroundColor: accentGold),
+              child: const Text('Guardar', style: TextStyle(color: bgDark)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveNewAppointment({
+    required String title,
+    required String notes,
+    required String time,
+    required String category,
+    required DateTime date,
+  }) async {
     final newAppt = Appointment(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
-      dateKey: parsed.dateKey,
-      time: parsed.time,
-      title: parsed.title,
-      category: parsed.category,
+      dateKey: dateKeyOf(date),
+      time: time,
+      title: title,
+      category: category,
+      notes: notes,
     );
     final updated = [..._appointments, newAppt]
       ..sort((a, b) => (a.dateKey + a.time).compareTo(b.dateKey + b.time));
-    setState(() {
-      _appointments = updated;
-      _lastAdded = parsed;
-    });
+    setState(() => _appointments = updated);
     await StorageService.saveAppointments(updated);
-    _jumpToDate(parsed.dateObj);
-    Future.delayed(const Duration(seconds: 5), () {
-      if (mounted) setState(() => _lastAdded = null);
-    });
+    _jumpToDate(date);
   }
 
   Future<void> _toggleManualListen() async {
