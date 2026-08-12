@@ -139,6 +139,7 @@ class StorageService {
   static const _apptsKey = 'appointments_v1';
   static const _alarmTimeKey = 'alarm_time_v1';
   static const _alarmOnKey = 'alarm_on_v1';
+  static const _autoListenKey = 'auto_listen_v1';
 
   static Future<List<Appointment>> loadAppointments() async {
     final prefs = await SharedPreferences.getInstance();
@@ -176,6 +177,16 @@ class StorageService {
   static Future<void> saveAlarmOn(bool v) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_alarmOnKey, v);
+  }
+
+  static Future<bool> loadAutoListen() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_autoListenKey) ?? true;
+  }
+
+  static Future<void> saveAutoListen(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_autoListenKey, v);
   }
 
   /// Datos de ejemplo la primera vez que se abre la app.
@@ -642,6 +653,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _alarmTime = '08:00';
   bool _alarmOn = true;
+  bool _autoListenOnOpen = true;
 
   @override
   void initState() {
@@ -655,10 +667,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final appts = await StorageService.loadAppointments();
     final alarmTime = await StorageService.loadAlarmTime();
     final alarmOn = await StorageService.loadAlarmOn();
+    final autoListen = await StorageService.loadAutoListen();
     setState(() {
       _appointments = appts;
       _alarmTime = alarmTime;
       _alarmOn = alarmOn;
+      _autoListenOnOpen = autoListen;
     });
   }
 
@@ -679,6 +693,18 @@ class _HomeScreenState extends State<HomeScreen> {
       },
     );
     setState(() => _speechAvailable = available);
+
+    // Escucha automáticamente apenas abre la app (si el interruptor de
+    // ⚙ está activado): así, combinado con una rutina de Google
+    // Assistant que abra la app al decir "agenda", el flujo queda
+    // "di agenda -> se abre -> ya está escuchando".
+    if (available && mounted) {
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted && _autoListenOnOpen && !_listening && !_handsFree) {
+          _toggleManualListen();
+        }
+      });
+    }
   }
 
   void _onSpeechStatus(String status) {
@@ -1510,6 +1536,24 @@ class _HomeScreenState extends State<HomeScreen> {
                 label: const Text('Probar notificación ahora', style: TextStyle(color: textMuted)),
               ),
               const Divider(height: 28, color: Colors.white10),
+              const Text('Voz',
+                  style: TextStyle(color: textPrimary, fontSize: 15, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              const Text(
+                'Si lo activas, apenas abras la app (por ejemplo con una rutina de Google Assistant que diga "agenda") empieza a escuchar sola, sin que toques el micrófono. Si lo apagas, solo escucha cuando tú tocas el botón.',
+                style: TextStyle(color: textMuted, fontSize: 11),
+              ),
+              SwitchListTile(
+                value: _autoListenOnOpen,
+                onChanged: (v) {
+                  setSheetState(() => _autoListenOnOpen = v);
+                  setState(() => _autoListenOnOpen = v);
+                  StorageService.saveAutoListen(v);
+                },
+                title: const Text('Escuchar automáticamente al abrir', style: TextStyle(color: textPrimary, fontSize: 13)),
+                activeColor: accentTeal,
+                contentPadding: EdgeInsets.zero,
+              ),
               const Text('Importar citas existentes',
                   style: TextStyle(color: textPrimary, fontSize: 15, fontWeight: FontWeight.bold)),
               const SizedBox(height: 4),
